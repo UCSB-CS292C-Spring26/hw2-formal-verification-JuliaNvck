@@ -256,12 +256,13 @@ def test_mult():
       while i < a  invariant r == i * b  ∧  i <= a  do
         r := r + b;  i := i + 1;
       { r == a * b }
-    I found the invariant by checking the precondition, postcondition, and tracing what happens in the loop body. Every iteration b is added to r and i is incremented (both starting at 0). Also the condition for the while loop is i < a, which must play a part in the invariant. 
-    The invariant r == i * b ∧ i <= a works because:
-- Initially, when i = 0, r = 0, so r == i * b holds: 0 = 0 * b --> 0 = 0. Also, i <= a holds since 0 <= a >= 0.
-- In each iteration, we add b to r and increment i by 1. If the invariant holds before the iteration, then after the iteration, i will be i + 1, which is <= a since we only go in the loop if i < a. 
-r will be (i) * b since we added b to r, so the invariant will still hold.
-- The loop terminates when i is no longer less than a, which means i == a so the invariant still holds (and r = i*b). At this point, the invariant tells us that r == a * b, which is exactly what the postcondition is.
+
+    # [EXPLAIN] I found the invariant by tracking the loop counter: after i
+    # iterations, the loop has added b exactly i times, so r == i * b; I also
+    # need i <= a so that when the loop exits, not(i < a) gives i == a.
+    # It holds initially because i = 0 and r = 0 (0 = 0 * b --> 0 = 0 and 0 <= a >= 0), and one loop step preserves it
+    # because r + b == (i + 1) * b while i < a implies i + 1 <= a.
+    # On exit, the invariant plus not(i < a) gives i == a, so r == a * b.
     """
     pre = Compare('>=', Var('a'), IntConst(0))
     inv = ImpAnd(
@@ -282,15 +283,24 @@ def test_add():
     Program C2 — Addition by loop:
       { n >= 0 ∧ m >= 0 }
       i := 0; r := n;
-      while i < m  invariant ???  do
+      while i < m  invariant r = n + i  ^ i <= m do
         r := r + 1;  i := i + 1;
       { r == n + m }
 
-    TODO: Replace the invariant below with a correct one.
+      # [EXPLAIN] I found the invariant by tracking the loop counter: after i
+      # iterations, the loop has added 1 exactly i times, so r == n + i; I also
+      # need i <= m so that when the loop exits, not(i < m) gives i == m.
+      # It holds initially because i = 0 and r = n (r = n + 0 --> r = n and 0 <= m >= 0), and one
+      # loop step preserves it because r + 1 == n + (i + 1) while i < m implies i + 1 <= m.
+      # On exit, the invariant plus not(i < m) gives i == m, so r == n + m.
+    
     """
     pre = ImpAnd(Compare('>=', Var('n'), IntConst(0)),
                  Compare('>=', Var('m'), IntConst(0)))
-    inv = BoolConst(True)  # ← WRONG — replace with correct invariant
+    inv = ImpAnd(
+        Compare('==', Var('r'), BinOp('+', Var('n'), Var('i'))),
+        Compare('<=', Var('i'), Var('m'))
+    )
     body = Seq(Assign('r', BinOp('+', Var('r'), IntConst(1))),
                Assign('i', BinOp('+', Var('i'), IntConst(1))))
     stmt = Seq(Assign('i', IntConst(0)),
@@ -305,14 +315,26 @@ def test_sum():
     Program C3 — Sum of 1..n:
       { n >= 1 }
       i := 1; s := 0;
-      while i <= n  invariant ???  do
+      while i <= n  invariant 2*s = (i * (i - 1)) ^ i <= n+1 do
         s := s + i;  i := i + 1;
       { 2 * s == n * (n + 1) }
 
-    TODO: Replace the invariant below with a correct one.
+    # [EXPLAIN] I found the invariant by noticing that when the loop counter is i,
+    # the loop has already added 1 through i - 1, so 2*s == i*(i - 1); I use this
+    # division-free form because the IMP language only has +, -, and *.
+    # The invariant holds initially at i = 1, s = 0, and one loop step preserves it
+    # because adding i gives 2*(s+i) == i*(i-1)+2*i == (i+1)*i.
+    # On exit, i <= n + 1 and not(i <= n) imply i == n + 1, so 2*s == n*(n+1).
     """
     pre = Compare('>=', Var('n'), IntConst(1))
-    inv = BoolConst(True)  # ← WRONG — replace with correct invariant
+    inv = ImpAnd(
+        Compare(
+            '==',
+            BinOp('*', IntConst(2), Var('s')),
+            BinOp('*', Var('i'), BinOp('-', Var('i'), IntConst(1)))
+        ),
+        Compare('<=', Var('i'), BinOp('+', Var('n'), IntConst(1)))
+    )
     body = Seq(Assign('s', BinOp('+', Var('s'), Var('i'))),
                Assign('i', BinOp('+', Var('i'), IntConst(1))))
     stmt = Seq(Assign('i', IntConst(1)),
@@ -327,10 +349,16 @@ def test_sum():
 # Part (d): Find the Bug — 4 pts
 #
 # The invariant below is WRONG (too weak). Your VCG should report failure.
-# 1. Run it — which side VC fails?
+# 1. Run it — which side VC fails? loop postcondition failds because the invariant is too weak to guarantee the postcondition.
 # 2. [EXPLAIN] Give a concrete state where the invariant holds but the
 #    postcondition does not.
 # 3. Fix the invariant and re-verify.
+
+# [EXPLAIN] The loop postcondition VC fails: the invariant
+# q*y + r == x is preserved by the body, but it is too weak to prove 0 <= r
+# after the loop exits. For example, x = 5, y = 3, q = 2, r = -1 satisfies
+# q*y + r == x and r < y, but violates the postcondition because r < 0.
+# Adding r >= 0 to the invariant fixes the proof.
 # ============================================================================
 
 def test_buggy_div():
@@ -338,7 +366,7 @@ def test_buggy_div():
     Integer division with a BUGGY invariant.
       { x >= 0 ∧ y > 0 }
       q := 0; r := x;
-      while r >= y  invariant (q * y + r == x)  do    ← TOO WEAK!
+      while r >= y  invariant (q * y + r == x)  do    ← TOO WEAK! r = x - yq and r >= 0
         r := r - y;  q := q + 1;
       { q * y + r == x ∧ 0 <= r ∧ r < y }
 
@@ -367,12 +395,16 @@ def test_buggy_div():
 
     verify(pre, stmt, post, "Buggy Division (should FAIL)")
 
-    # TODO: Uncomment and fix the invariant below, then re-verify.
-    # inv_fixed = ImpAnd(
-    #     Compare('==', BinOp('+', BinOp('*', Var('q'), Var('y')), Var('r')), Var('x')),
-    #     ???  # ← Add the missing conjunct
-    # )
-    # ... rebuild stmt with inv_fixed and call verify(...)
+    # Uncomment and fix the invariant below, then re-verify.
+    inv_fixed = ImpAnd(
+        Compare('==', BinOp('+', BinOp('*', Var('q'), Var('y')), Var('r')), Var('x')),
+        Compare('>=', Var('r'), IntConst(0))
+    )
+    stmt = Seq(Assign('q', IntConst(0)),
+               Seq(Assign('r', Var('x')),
+                   While(Compare('>=', Var('r'), Var('y')),
+                         inv_fixed, body)))
+    verify(pre, stmt, post, "FIXED: Verified")
 
 
 # ============================================================================
