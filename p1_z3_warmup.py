@@ -15,8 +15,10 @@ def part_a():
     x, y, z = Ints('x y z')
     s = Solver()
 
-    # TODO: Add constraints
-    # s.add(...)
+    s.add(x + 2*y == z)
+    s.add(z > 10)
+    s.add(x > 0)
+    s.add(y > 0)
 
     print("=== Part (a) ===")
     if s.check() == sat:
@@ -36,8 +38,8 @@ def part_b():
     x = Int('x')
     s = Solver()
 
-    # TODO: Add the *negation* of the formula and check UNSAT
-    # s.add(...)
+    # Add the *negation* of the formula and check UNSAT
+    s.add(Not(Implies(x > 5, x > 3)))
 
     print("=== Part (b) ===")
     result = s.check()
@@ -67,8 +69,10 @@ def part_c():
     f = Function('f', S, S)
     s = Solver()
 
-    # TODO: Add the three constraints
-    # s.add(...)
+    # Add the three constraints
+    s.add(f(f(x)) == x)
+    s.add(f(f(f(x))) == x)
+    s.add(f(x) != x)
 
     print("=== Part (c) ===")
     result = s.check()
@@ -76,7 +80,35 @@ def part_c():
         print(f"SAT: {s.model()}")
     else:
         print("UNSAT")
-    # TODO: Add Z3 derivation steps below (see STEP 2 above).
+    # Add Z3 derivation steps below (see STEP 2 above).
+    print("Derivation steps:")
+    # Derivation step 1:
+    # If f(f(x)) = x, then applying f to both sides gives
+    # f(f(f(x))) = f(x).
+    s1 = Solver()
+    step1 = Implies(f(f(x)) == x, f(f(f(x))) == f(x))
+    s1.add(Not(step1)) # Negate the implication to check validity
+    print(
+        "Check 1: f(f(x)) = x implies f(f(f(x))) = f(x):",
+        "Valid" if s1.check() == unsat else "INVALID"
+    )
+    # Derivation step 2:
+    # If f(f(f(x))) equals both f(x) and x, then f(x) = x.
+    s2 = Solver()
+    step2 = Implies(And(f(f(f(x))) == f(x), f(f(f(x))) == x), f(x) == x)
+    s2.add(Not(step2))
+    print(
+        "Check 2: f(f(f(x))) = f(x) and f(f(f(x))) = x implies f(x) = x:",
+        "Valid" if s2.check() == unsat else "INVALID"
+    )
+    # Derivation step 3:
+    # The original constraints force f(x) = x, but also require f(x) != x.
+    s3 = Solver()
+    s3.add(f(f(f(x))) == f(x), f(f(f(x))) == x, f(x) != x)
+    print(
+        "Check 3: f(f(f(x))) == f(x), f(f(f(x))) == x, f(x) != x: derived equality contradicts f(x) != x:",
+        "Valid contradiction, unsat" if s3.check() == unsat else "INVALID"
+    )
     print()
 
 
@@ -89,6 +121,10 @@ def part_c():
 #
 # [EXPLAIN] in a comment below: Why are these two axioms together sufficient
 # to fully characterize Store/Select behavior? (2–3 sentences)
+# Explanation:
+# The two axioms together capture the essential behavior of arrays under the Store and Select operations, where Store updates the value at a specific index while leaving all other indices unchanged and Select retrieves correct values from the array.
+# Axiom (1) states that if we store a value v at index i and then select from the same index j (where j = i), we should get back the value v, which captures the "hit" case. 
+# Axiom (2) states that if we select from a different index j (where j ≠ i), we should get the value that was originally at index j before the store operation, which captures the "miss" case.
 # ---------------------------------------------------------------------------
 def part_d():
     a = Array('a', IntSort(), IntSort())
@@ -98,15 +134,15 @@ def part_d():
 
     # Axiom 1: Read-over-write HIT
     s1 = Solver()
-    # TODO: Negate axiom 1 and check UNSAT
-    # s1.add(...)
+    # Negate axiom 1 and check UNSAT
+    s1.add(Not(Implies(i == j, Select(Store(a, i, v), j) == v)))
     r1 = s1.check()
     print(f"Axiom 1 (hit):  {'Valid' if r1 == unsat else 'INVALID'}")
 
     # Axiom 2: Read-over-write MISS
     s2 = Solver()
-    # TODO: Negate axiom 2 and check UNSAT
-    # s2.add(...)
+    # Negate axiom 2 and check UNSAT
+    s2.add(Not(Implies(i != j, Select(Store(a, i, v), j) == Select(a, j))))
     r2 = s2.check()
     print(f"Axiom 2 (miss): {'Valid' if r2 == unsat else 'INVALID'}")
     print()
