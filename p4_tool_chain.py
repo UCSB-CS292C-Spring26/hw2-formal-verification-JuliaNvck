@@ -290,13 +290,13 @@ def part_b():
     # [EXPLAIN] in a comment:
     # Compare the DFA monitor approach (Part a) with the Z3 bounded approach:
     # What does each one catch that the other might miss?
-     # [EXPLAIN] The DFA monitors are runtime checks: they process one concrete
+    # [EXPLAIN] The DFA monitors are runtime checks: they process one concrete
     # trace as it happens and can immediately deny the exact event that violates
     # the policy. They are good for enforcement, but they only see the trace that
     # actually occurs, so they do not prove that all possible traces are safe.
-    # The Z3 bounded approach explores symbolic traces up to length K and find
-    # if any counterexamples exist, which might not appear in the provided tests that DFA monitors.,
-    # However it is only complete up to the chosen bound K, while a DFA monitor can keep
+    # The Z3 bounded approach explores symbolic traces up to length K and finds
+    # counterexamples that might not appear in the provided DFA test traces.
+    # However, it is only complete up to the chosen bound K, while a DFA monitor can keep
     # running on traces of any length. For Z3, the pattern is assert the negation of the property,
     # so if the results are sat, it means a violation exists, while if unsat, it means no violation exists within the bound.
 
@@ -315,8 +315,8 @@ def part_b():
 
 def part_c():
     """
-    TODO: Construct a trace (list of ToolEvent) of length 6 that passes
-    the ComposedMonitor but is still dangerous.
+    Construct a trace (list of ToolEvent) of length 6 that passes the
+    ComposedMonitor but is still dangerous.
 
     Hint: Think about what the three monitors DON'T check. For example:
     - Do they check how many times a tool is called?
@@ -326,10 +326,13 @@ def part_c():
     """
     print("=== Part (c): Monitor Completeness ===\n")
 
-    # TODO: Define your trace
     trace = [
-        # ToolEvent(...),
-        # ...
+        ToolEvent("file_read",  "/project/data/info.txt", False),  # read non-sensitive file
+        ToolEvent("file_write", "/project/data/info.txt", False),  # write to it (allowed by all monitors)
+        ToolEvent("file_read",  "/project/data/info.txt", False),  # read non-sensitive file again (still allowed)
+        ToolEvent("file_read",  "/project/data/info.txt", False),  # read non-sensitive file again (still allowed)
+        ToolEvent("shell_exec", "/bin/rm -rf /project/data/info.txt", False),  # execute a dangerous command (not checked by monitors)
+        ToolEvent("file_read",  "/project/data/info.txt", False),  # read the file again (now it's gone)
     ]
 
     cm = ComposedMonitor()
@@ -343,6 +346,13 @@ def part_c():
 
     print(f"\n  All allowed: {all_allowed}")
     # [EXPLAIN] in a comment: what property does this trace violate and why?
+    # This trace violates the property of "no destructive shell commands."
+    # The shell_exec step runs a command that deletes a project file, which is
+    # dangerous even though it is not a file_write outside the sandbox, a
+    # write-before-read, or a network fetch after reading sensitive data. The
+    # monitors do not inspect shell_exec commands, so they allow it. To catch
+    # this, we could add a ShellCommandMonitor that denies destructive patterns
+    # such as "rm -rf" or requires shell_exec commands to match an allowlist.
     print()
 
 
