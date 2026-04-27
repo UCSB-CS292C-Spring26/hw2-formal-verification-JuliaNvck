@@ -44,16 +44,17 @@ class SandboxMonitor:
       - State OK (accepting): no violations yet.
       - State VIOLATION (rejecting): a write outside sandbox was attempted.
     Once in VIOLATION, all subsequent calls are denied.
-
-    TODO: Implement __init__ and step.
     """
 
     def __init__(self):
-        # TODO
-        pass
+        self.state = "OK"
 
     def step(self, event: ToolEvent) -> str:
-        # TODO
+        if self.state == "VIOLATION":
+            return DENY
+        if event.tool == "file_write" and not event.path.startswith(SANDBOX_DIR):
+            self.state = "VIOLATION"
+            return DENY
         return ALLOW
 
 
@@ -68,16 +69,18 @@ class ReadBeforeWriteMonitor:
     Unlike SandboxMonitor, this monitor does NOT enter an absorbing violation
     state — it only denies the specific file_write that has no prior read.
     Subsequent operations are evaluated independently.
-
-    TODO: Implement __init__ and step.
     """
 
     def __init__(self):
-        # TODO: track which paths have been read
-        pass
+        # track which paths have been read
+        self.read_paths = set()
 
     def step(self, event: ToolEvent) -> str:
-        # TODO
+        if event.tool == "file_read":
+            self.read_paths.add(event.path)
+        elif event.tool == "file_write":
+            if event.path not in self.read_paths:
+                return DENY
         return ALLOW
 
 
@@ -90,16 +93,17 @@ class NoExfilMonitor:
       - State CLEAN: no sensitive data has been read yet.
       - State TAINTED: a sensitive file_read has occurred.
     In TAINTED state, network_fetch is denied.
-
-    TODO: Implement __init__ and step.
     """
 
     def __init__(self):
-        # TODO
-        pass
+        self.state = "CLEAN"
 
     def step(self, event: ToolEvent) -> str:
-        # TODO
+        if self.state == "TAINTED":
+            if event.tool == "network_fetch":
+                return DENY
+        if event.tool == "file_read" and event.is_sensitive:
+            self.state = "TAINTED"
         return ALLOW
 
 
@@ -230,8 +234,6 @@ def part_b():
     """
     For each of the three properties, encode the NEGATION and use Z3 to
     find a violating trace (or prove none exists).
-
-    TODO: Implement the negation functions for each property.
     """
     K = 8
     print(f"=== Part (b): Bounded Trace Verification (K={K}) ===\n")
@@ -241,27 +243,45 @@ def part_b():
         """
         Return constraints asserting: there EXISTS a step where
         tool = FILE_WRITE and in_sandbox = False.
-        TODO: Implement.
         """
-        return []  # ← replace
+        bad_steps = []
+        for i in range(trace['K']):
+            bad_steps.append(And(trace['tool'][i] == FILE_WRITE, Not(trace['in_sandbox'][i])))
+        return Or(bad_steps)
 
     # Property 2: Read-before-write — every file_write at step j to path p
     # must have a file_read at some step i < j to the same path p.
     def negate_read_before_write(trace):
         """
-        TODO: Implement. This one is trickier — you need to express that
+        This one is trickier — you need to express that
         there exists a step j where tool = FILE_WRITE and for ALL i < j,
         either tool[i] != FILE_READ or path_id[i] != path_id[j].
         """
-        return []  # ← replace
+        bad_steps = []
+        for j in range(trace['K']):
+            write_cond = trace['tool'][j] == FILE_WRITE
+            no_prior_read = []
+            for i in range(j):
+                no_prior_read.append(Or(trace['tool'][i] != FILE_READ,
+                                        trace['path_id'][i] != trace['path_id'][j]))
+            bad_steps.append(And(write_cond, And(no_prior_read)))
+        return Or(bad_steps)
 
     # Property 3: No exfiltration — if file_read at step i is sensitive,
     # then no network_fetch at any step j > i.
     def negate_no_exfil(trace):
-        """
-        TODO: Implement.
-        """
-        return []  # ← replace
+        bad_pairs = []
+        for i in range(trace['K']):
+            for j in range(i + 1, trace['K']):
+                bad_pairs.append(
+                    And(
+                        trace['tool'][i] == FILE_READ,
+                        trace['is_sensitive'][i],
+                        trace['tool'][j] == NETWORK_FETCH
+                    )
+                )
+
+        return Or(bad_pairs)
 
     verify_property_bounded("Sandbox", K, negate_sandbox)
     verify_property_bounded("Read-before-write", K, negate_read_before_write)
@@ -270,6 +290,15 @@ def part_b():
     # [EXPLAIN] in a comment:
     # Compare the DFA monitor approach (Part a) with the Z3 bounded approach:
     # What does each one catch that the other might miss?
+     # [EXPLAIN] The DFA monitors are runtime checks: they process one concrete
+    # trace as it happens and can immediately deny the exact event that violates
+    # the policy. They are good for enforcement, but they only see the trace that
+    # actually occurs, so they do not prove that all possible traces are safe.
+    # The Z3 bounded approach explores symbolic traces up to length K and find
+    # if any counterexamples exist, which might not appear in the provided tests that DFA monitors.,
+    # However it is only complete up to the chosen bound K, while a DFA monitor can keep
+    # running on traces of any length. For Z3, the pattern is assert the negation of the property,
+    # so if the results are sat, it means a violation exists, while if unsat, it means no violation exists within the bound.
 
 
 # ============================================================================
