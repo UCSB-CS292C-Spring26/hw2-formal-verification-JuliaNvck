@@ -65,117 +65,54 @@ def make_policy(include_r4=True):
     r = Const('r', Resource)
     t = Int('t')
 
-    constraints = []
+    valid_role = ForAll([u],
+        Or(role(u) == ADMIN, role(u) == DEVELOPER, role(u) == VIEWER)
+    )
 
-    # Encode R1–R5
-    constraints.append(ForAll([u], Or(role(u) == ADMIN, role(u) == DEVELOPER, role(u) == VIEWER))) # cannot invent new roles
-    # Viewers may only file_read non-sensitive resources.
-    constraints.append(
-        ForAll([u, r],
-            Implies(
-                And(role(u) == VIEWER, Not(is_sensitive(r))),
-                allowed(u, FILE_READ, r)
+    viewer_allow = And(
+        role(u) == VIEWER,
+        t == FILE_READ,
+        Not(is_sensitive(r))
+    )
+
+    developer_allow = And(
+        role(u) == DEVELOPER,
+        Or(
+            t == FILE_READ,
+            And(
+                t == FILE_WRITE,
+                Or(owner(r) == u, in_sandbox(r))
             )
         )
     )
 
-    constraints.append(
-        ForAll([u, r],
-            Implies(
-                And(role(u) == VIEWER, is_sensitive(r)),
-                Not(allowed(u, FILE_READ, r))
-            )
+    admin_allow = And(
+        role(u) == ADMIN,
+        Or(
+            t == FILE_READ,
+            t == FILE_WRITE,
+            t == SHELL_EXEC,
+            t == NETWORK_FETCH
         )
     )
 
-    constraints.append(
-        ForAll([u, r],
-            Implies(
-                role(u) == VIEWER,
-                And(
-                    Not(allowed(u, FILE_WRITE, r)),
-                    Not(allowed(u, SHELL_EXEC, r)),
-                    Not(allowed(u, NETWORK_FETCH, r))
-                )
-            )
-        )
-    )
-
-    # Developers may file_read anything and file_write resources they own or that are in the sandbox.
-    constraints.append(
-        ForAll([u, r],
-            Implies(
-                role(u) == DEVELOPER,
-                And(
-                    allowed(u, FILE_READ, r),
-                    Implies(
-                        Or(owner(r) == u, in_sandbox(r)),
-                        allowed(u, FILE_WRITE, r),
-                    )
-                )
-            )
-        )
-    )
-
-    constraints.append(
-        ForAll([u, r],
-            Implies(
-                And(role(u) == DEVELOPER, Not(Or(owner(r) == u, in_sandbox(r)))),
-                Not(allowed(u, FILE_WRITE, r))
-            )
-        )
-    )
-
-    constraints.append(
-        ForAll([u, r],
-            Implies(
-                role(u) == DEVELOPER,
-                And(
-                    Not(allowed(u, SHELL_EXEC, r)),
-                    Not(allowed(u, NETWORK_FETCH, r))
-                )
-            )
-        )
-    )
-
-    # Admins may use any tool on any resource.
-    constraints.append(
-        ForAll([u, r],
-            Implies(
-                role(u) == ADMIN,
-                And(
-                    allowed(u, FILE_READ, r),
-                    allowed(u, FILE_WRITE, r),
-                    Implies(Not(is_sensitive(r)), allowed(u, SHELL_EXEC, r)),  # R4 overrides R3 for admins
-                    Implies(in_sandbox(r), allowed(u, NETWORK_FETCH, r))  # R4 also restricts network_fetch to sandbox resources for admins
-                )
-            )
-        )
-    )
-
-
-    # Nobody may shell_exec on sensitive resources (overrides R3).
+    # Closed-world policy: allowed is true exactly for rule-authorized actions,
+    # after global deny overrides are applied.
+    base_allow = Or(viewer_allow, developer_allow, admin_allow)
+    valid_tool = And(t >= FILE_READ, t <= NETWORK_FETCH)
+    overrides = [Not(And(t == NETWORK_FETCH, Not(in_sandbox(r))))]
     if include_r4:
-        constraints.append(
-            ForAll([u, r],
-                Implies(
-                    is_sensitive(r),
-                    Not(allowed(u, SHELL_EXEC, r))
-                )
-            )
-        )
+        overrides.append(Not(And(t == SHELL_EXEC, is_sensitive(r))))
 
-    # network_fetch is allowed only on sandbox resources.
-    constraints.append(
-        ForAll([u, r],
-            Implies(
-                Not(in_sandbox(r)),
-                Not(allowed(u, NETWORK_FETCH, r))
-            )
+    exact_policy = ForAll([u, t, r],
+        allowed(u, t, r) == And(
+            valid_tool,
+            base_allow,
+            *overrides
         )
     )
 
-    return constraints
+    return [valid_role, exact_policy]
 
 
 # ============================================================================
@@ -366,6 +303,7 @@ def part_c():
 
     attack = And(
         step1_allowed,
+        Not(allowed_before(u, SHELL_EXEC, r2)),
         side_effect,
         step2_allowed
     )
