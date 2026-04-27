@@ -52,11 +52,10 @@ allowed = Function('allowed', User, IntSort(), Resource, BoolSort())
 # Return a list of Z3 constraints.
 # ============================================================================
 
-def make_policy():
+def make_policy(include_r4=True):
     """
     Return a list of Z3 constraints encoding rules R1–R5.
 
-    TODO: Implement this. You need to think about:
     1. How to express "viewers may ONLY do X" (everything else is denied).
     2. How R4 overrides R3 for admins.
     3. Whether you need a closed-world assumption (if not explicitly
@@ -68,8 +67,112 @@ def make_policy():
 
     constraints = []
 
-    # TODO: Encode R1–R5
-    # Hint: Start with a default-deny rule, then add exceptions.
+    # Encode R1–R5
+    # Viewers may only file_read non-sensitive resources.
+    constraints.append(
+        ForAll([u, r],
+            Implies(
+                And(role(u) == VIEWER, Not(is_sensitive(r))),
+                allowed(u, FILE_READ, r)
+            )
+        )
+    )
+
+    constraints.append(
+        ForAll([u, r],
+            Implies(
+                And(role(u) == VIEWER, is_sensitive(r)),
+                Not(allowed(u, FILE_READ, r))
+            )
+        )
+    )
+
+    constraints.append(
+        ForAll([u, r],
+            Implies(
+                role(u) == VIEWER,
+                And(
+                    Not(allowed(u, FILE_WRITE, r)),
+                    Not(allowed(u, SHELL_EXEC, r)),
+                    Not(allowed(u, NETWORK_FETCH, r))
+                )
+            )
+        )
+    )
+
+    # Developers may file_read anything and file_write resources they own or that are in the sandbox.
+    constraints.append(
+        ForAll([u, r],
+            Implies(
+                role(u) == DEVELOPER,
+                And(
+                    allowed(u, FILE_READ, r),
+                    Implies(
+                        Or(owner(r) == u, in_sandbox(r)),
+                        allowed(u, FILE_WRITE, r),
+                    )
+                )
+            )
+        )
+    )
+
+    constraints.append(
+        ForAll([u, r],
+            Implies(
+                And(role(u) == DEVELOPER, Not(Or(owner(r) == u, in_sandbox(r)))),
+                Not(allowed(u, FILE_WRITE, r))
+            )
+        )
+    )
+
+    constraints.append(
+        ForAll([u, r],
+            Implies(
+                role(u) == DEVELOPER,
+                And(
+                    Not(allowed(u, SHELL_EXEC, r)),
+                    Not(allowed(u, NETWORK_FETCH, r))
+                )
+            )
+        )
+    )
+
+    # Admins may use any tool on any resource.
+    constraints.append(
+        ForAll([u, r],
+            Implies(
+                role(u) == ADMIN,
+                And(
+                    allowed(u, FILE_READ, r),
+                    allowed(u, FILE_WRITE, r),
+                    Implies(Not(is_sensitive(r)), allowed(u, SHELL_EXEC, r)),
+                    Implies(in_sandbox(r), allowed(u, NETWORK_FETCH, r))
+                )
+            )
+        )
+    )
+
+
+    # Nobody may shell_exec on sensitive resources (overrides R3).
+    if include_r4:
+        constraints.append(
+            ForAll([u, r],
+                Implies(
+                    is_sensitive(r),
+                    Not(allowed(u, SHELL_EXEC, r))
+                )
+            )
+        )
+
+    # network_fetch is allowed only on sandbox resources.
+    constraints.append(
+        ForAll([u, r],
+            Implies(
+                Not(in_sandbox(r)),
+                Not(allowed(u, NETWORK_FETCH, r))
+            )
+        )
+    )
 
     return constraints
 
@@ -97,8 +200,6 @@ def part_b():
     """
     Answer the four queries from the README.
     For query 4, also demonstrate what becomes possible without R4.
-
-    TODO: Implement each query.
     """
     policy = make_policy()
     print("=== Part (b): Policy Queries ===\n")
@@ -107,16 +208,60 @@ def part_b():
     r = Const('r', Resource)
 
     # Q1: Can a developer write to a sensitive file they don't own, in the sandbox?
-    # TODO
+    query(
+        "Q1: Can a developer write to a sensitive file they don't own, in the sandbox?",
+        policy,
+        And(
+            role(u) == DEVELOPER,
+            is_sensitive(r),
+            Not(owner(r) == u),
+            in_sandbox(r),
+            allowed(u, FILE_WRITE, r)
+        )
+    )
+
+    # This is SAT because the policy allows developers to write to sandbox resources, even if they are sensitive and not owned by the developer.
 
     # Q2: Can an admin network_fetch a resource outside the sandbox?
-    # TODO
+    query(
+        "Q2: Can an admin network_fetch a resource outside the sandbox?",
+        policy,
+        And(
+            role(u) == ADMIN,
+            Not(in_sandbox(r)),
+            allowed(u, NETWORK_FETCH, r)
+        )
+    )
+
+    # This is UNSAT because the policy explicitly states that network_fetch is only allowed on sandbox resources, even for admins.
 
     # Q3: Is there ANY role that can shell_exec on a sensitive resource?
-    # TODO
+    query(
+        "Q3: Is there ANY role that can shell_exec on a sensitive resource?",
+        policy,
+        And(
+            is_sensitive(r),
+            allowed(u, SHELL_EXEC, r)
+        )
+    )
+
+    # This is UNSAT because the policy explicitly states that nobody may shell_exec on sensitive resources.
 
     # Q4: [EXPLAIN] in a comment Remove R4 — what dangerous action becomes possible?
-    # TODO: Create a modified policy without R4, demonstrate the new capability.
+    # Create a modified policy without R4, demonstrate the new capability.
+    policy_without_r4 = make_policy(include_r4=False)
+    query(
+        "Q4: Without R4, can an admin shell_exec on a sensitive resource?",
+        policy_without_r4,
+        [
+            role(u) == ADMIN,
+            is_sensitive(r),
+            allowed(u, SHELL_EXEC, r)
+        ]
+    )
+
+    # This is SAT because without R4, the constraint that nobody may shell_exec on sensitive resources is removed, allowing admins to shell_exec on sensitive resources, which could lead to privilege escalation or data breaches if the sensitive resource contains critical information or controls.``
+
 
 
 # ============================================================================
