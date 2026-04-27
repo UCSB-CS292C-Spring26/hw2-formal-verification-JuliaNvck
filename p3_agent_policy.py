@@ -68,6 +68,7 @@ def make_policy(include_r4=True):
     constraints = []
 
     # Encode R1–R5
+    constraints.append(ForAll([u], Or(role(u) == ADMIN, role(u) == DEVELOPER, role(u) == VIEWER))) # cannot invent new roles
     # Viewers may only file_read non-sensitive resources.
     constraints.append(
         ForAll([u, r],
@@ -145,8 +146,8 @@ def make_policy(include_r4=True):
                 And(
                     allowed(u, FILE_READ, r),
                     allowed(u, FILE_WRITE, r),
-                    Implies(Not(is_sensitive(r)), allowed(u, SHELL_EXEC, r)),
-                    Implies(in_sandbox(r), allowed(u, NETWORK_FETCH, r))
+                    Implies(Not(is_sensitive(r)), allowed(u, SHELL_EXEC, r)),  # R4 overrides R3 for admins
+                    Implies(in_sandbox(r), allowed(u, NETWORK_FETCH, r))  # R4 also restricts network_fetch to sandbox resources for admins
                 )
             )
         )
@@ -260,7 +261,7 @@ def part_b():
         ]
     )
 
-    # This is SAT because without R4, the constraint that nobody may shell_exec on sensitive resources is removed, allowing admins to shell_exec on sensitive resources, which could lead to privilege escalation or data breaches if the sensitive resource contains critical information or controls.``
+    # This is SAT because without R4, the constraint that nobody may shell_exec on sensitive resources is removed, allowing admins to shell_exec on sensitive resources, which could lead to privilege escalation or data breaches if the sensitive resource contains critical information or controls.
 
 
 
@@ -280,7 +281,6 @@ def part_b():
 
 def part_c():
     """
-    TODO:
     1. Add rule R6 to the policy.
     2. Model a 2-step trace:
        - Step 1: developer calls shell_exec on resource r1
@@ -296,11 +296,117 @@ def part_c():
     """
     print("=== Part (c): Privilege Escalation ===\n")
 
-    # TODO: Your encoding here.
-    # Hint: Use is_sensitive_before and is_sensitive_after as two separate
-    # functions, or use a time-indexed model.
+    u = Const('u_c', User)
+    r = Const('r_c', Resource)
+    is_sensitive_before = Function('is_sensitive_before', Resource, BoolSort())
+    is_sensitive_after = Function('is_sensitive_after', Resource, BoolSort())
+    allowed_before = Function('allowed_before', User, IntSort(), Resource, BoolSort())
+    allowed_after = Function('allowed_after', User, IntSort(), Resource, BoolSort())
+    r1 = Const('r1', Resource)
+    r2 = Const('r2', Resource)
 
-    print("  TODO: Implement escalation analysis")
+    trace_policy = [
+        ForAll([u], Or(role(u) == ADMIN, role(u) == DEVELOPER, role(u) == VIEWER)),
+
+        # R6 before step 1: developers may shell_exec on non-sensitive sandbox resources.
+        ForAll([u, r],
+            Implies(
+                And(role(u) == DEVELOPER, Not(is_sensitive_before(r)), in_sandbox(r)),
+                allowed_before(u, SHELL_EXEC, r)
+            )
+        ),
+        # R4 before step 1: nobody may shell_exec on sensitive resources.
+        ForAll([u, r],
+            Implies(
+                is_sensitive_before(r),
+                Not(allowed_before(u, SHELL_EXEC, r))
+            )
+        ),
+
+        # R6 after step 1: developers may shell_exec on resources that are now
+        # non-sensitive and sandboxed.
+        ForAll([u, r],
+            Implies(
+                And(role(u) == DEVELOPER, Not(is_sensitive_after(r)), in_sandbox(r)),
+                allowed_after(u, SHELL_EXEC, r)
+            )
+        ),
+        # R4 after step 1: the sensitive-resource shell_exec ban still applies.
+        ForAll([u, r],
+            Implies(
+                is_sensitive_after(r),
+                Not(allowed_after(u, SHELL_EXEC, r))
+            )
+        ),
+    ]
+
+    # Step 1: developer can shell_exec on non-sensitive sandbox r1.
+    step1_allowed = And(
+        role(u) == DEVELOPER,
+        Not(is_sensitive_before(r1)),
+        in_sandbox(r1),
+        allowed_before(u, SHELL_EXEC, r1)
+    )
+
+    # Side effect: r2 was sensitive before, but is made non-sensitive after.
+    side_effect = And(
+        r1 != r2,
+        is_sensitive_before(r2),
+        Not(is_sensitive_after(r2))
+    )
+
+    # R6 after step 2: because r2 is now non-sensitive and sandboxed,
+    # developer can shell_exec on r2.
+    step2_allowed = And(
+        role(u) == DEVELOPER,
+        Not(is_sensitive_after(r2)),
+        in_sandbox(r2),
+        allowed_after(u, SHELL_EXEC, r2)
+    )
+
+    attack = And(
+        step1_allowed,
+        side_effect,
+        step2_allowed
+    )
+
+    result = query(
+        "Can a developer bypass R4 by changing r2 from sensitive to non-sensitive?",
+        trace_policy,
+        attack
+    )
+
+    # [EXPLAIN] The bug is that R4 checks whether a resource is sensitive at
+    # the moment shell_exec is called, but it does not protect the metadata that
+    # controls sensitivity. A developer can use shell_exec on an allowed sandbox
+    # resource to modify a config file, causing another resource to no longer be
+    # marked sensitive. Then the second shell_exec is allowed because the target
+    # appears non-sensitive after the metadata change.
+    #
+    # Fix: developer shell_exec must not declassify resources. If a developer
+    # runs shell_exec, then any resource that was sensitive before the command
+    # must still be sensitive afterward.
+    fix = Implies(
+        step1_allowed,
+        ForAll([r],
+            Implies(
+                is_sensitive_before(r),
+                is_sensitive_after(r)
+            )
+        )
+    )
+
+    fixed_result = query(
+        "After the fix, can the developer still bypass R4?",
+        trace_policy + [fix],
+        attack
+    )
+
+    if result == sat and fixed_result == unsat:
+        print("  ESCALATION BLOCKED")
+    else:
+        print("  Fix did not block the escalation as expected")
+
     print()
 
 
